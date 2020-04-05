@@ -1,0 +1,134 @@
+%c4.5算法
+function D = C4_5(train_features, train_targets, inc_node,test_features)
+    % Inputs:  
+    %   training_patterns   - Train patterns 训练样本  每一列代表一个样本 每一行代表一个特征
+    %   training_targets    - Train targets  1×训练样本个数 每个训练样本对应的判别值
+    %   test_patterns       - Test  patterns 测试样本，每一列代表一个样本  
+    %   inc_node            - Percentage of incorrectly assigned samples at a node  一个节点上未正确分配的样本的百分比
+    %   inc_node为防止过拟合，表示样本数小于一定阈值结束递归，可设置为5-10
+    %   注意inc_node设置太大的话会导致分类准确率下降，太小的话可能会导致过拟合  
+    %  Nu is to determine whether the variable is discrete or continuous (the value is always set to 10)  
+    %  Nu用于确定变量是离散还是连续（该值始终设置为10）
+    %  这里用10作为一个阈值，如果某个特征的无重复的特征值的数目比这个阈值还小，就认为这个特征是离散的
+    % Outputs：
+    %   test_targets        - Predicted targets 1×测试样本个数 得到每个测试样本对应的判别值
+    %   也就是输出所有测试样本最终的判别情况
+[Ni, M] = size(train_features); %%M是训练样本数，Ni是训练样本维数，即是特征数目
+inc_node = inc_node*M/100;% 5*训练样本数目/100
+
+%建立决策树
+disp('Building tree')
+tree = make_tree(train_features, train_targets, inc_node);
+
+%根据产生的数产生决策域
+disp('Building decision surface using the tree')
+[n,m]=size(test_features);
+targets = use_tree(test_features, 1:m, tree, unique(train_targets)); %target里包含了对应的测试样本分类所得的类别数
+
+D = targets;
+%END
+
+function targets = use_tree(features, indices, tree,  Uc) %target里包含了对应的测试样本分类所得的类别
+targets = zeros(1, size(features,2)); %1*M的向量
+if (tree.dim == 0)
+    %Reached the end of the tree
+    targets(indices) = tree.child;
+    return %child里面包含了类别信息，indeces包含了测试样本中当前测试的样本索引
+end
+dim = tree.dim; %当前节点的特征参数
+dims= 1:size(features,1); %dims为1-特征维数的向量
+%Discrete feature
+in = indices(find(features(dim, indices) <= tree.split_loc)); %in为左子树在原矩阵的index
+targets = targets + use_tree(features(dims, :), in, tree.child_1, Uc);
+in = indices(find(features(dim, indices) >  tree.split_loc));
+targets = targets + use_tree(features(dims, :), in, tree.child_2, Uc);
+return
+
+%建立决策树
+function tree = make_tree(features, targets, inc_node)
+
+[Ni, L] = size(features); %训练集属性
+Uc = unique(targets); %UC表示类别数 
+tree.dim = 0; %数的维度为0
+
+if isempty(features), %如果特征为空，退出
+    return
+end
+
+%When to stop: If the dimension is one or the number of examples is small
+if ((inc_node > L) | (L == 1) | (length(Uc) == 1)), %剩余训练集只剩一个，或太小，小于inc_node，或只剩一类，退出
+    H = hist(targets, length(Uc)); %返回类别数的直方图
+    [m, largest] = max(H); %更大的一类，m为大的值，即个数，largest为位置，即类别的位置
+    tree.child = Uc(largest); %直接返回其中更大的一类作为其类别
+    return
+end
+
+%Compute the node's I
+%计算现有的信息量
+for i = 1:length(Uc)
+    Pnode(i) = length(find(targets == Uc(i))) / L;
+end
+Inode =-sum(Pnode.*log(Pnode)/log(2));
+
+%对于每个维数，计算增益比杂质这是分别做的离散和连续的特点
+%This is done separately for discrete and continuous features
+delta_Ib = zeros(1, Ni);
+S=[];
+for i = 1:Ni,
+    data = features(i,:);
+    temp=unique(data);%数据的类别数
+    P = zeros(length(Uc), 2);
+    
+    %Sort the features 排序
+    [sorted_data, indices] = sort(data);
+    sorted_targets = targets(indices);
+    %结果为排序后的特征和类别
+    %计算每个可能的拆分的信息
+    I = zeros(1, L-1);
+    
+    for j = 1:L-1,
+        for k =1:length(Uc),
+            P(k,1) = length(find(sorted_targets(1:j)        == Uc(k)));
+            P(k,2) = length(find(sorted_targets(j+1:end) == Uc(k)));
+        end
+        Ps = sum(P)/L; %两个子树的权重
+        temp1=[P(1,1),P(2,1)];
+        temp2=[P(1,2),P(2,2)];
+        fo=[info(temp1),info(temp2)];
+        %info  = sum(-P.*log(eps+P)/log(2)); %两个子树的I
+        I(j) = Inode - sum(fo.*Ps);%计算增益
+    end
+    [delta_Ib(i), s] = max(I);%选取划分后增益最大的属性
+    S=[S,s];%将属性加入树
+    
+end
+
+%找到最大的划分方法
+[m, dim] = max(delta_Ib);
+
+dims = 1:Ni;
+tree.dim = dim;
+
+%分裂树Split along the 'dim' dimension
+%Continuous feature
+[sorted_data, indices] = sort(features(dim,:));
+
+S(dim)
+indices1=indices(1:S(dim))
+indices2=indices(S(dim)+1:end)
+tree.split_loc=sorted_data(S(dim))
+tree.child_1 = make_tree(features(dims, indices1), targets(indices1), inc_node);
+tree.child_2 = make_tree(features(dims, indices2), targets(indices2), inc_node);
+
+%计算集合熵的函数
+ function I=Info(A)  
+L=sum(A);%计算总数  
+A=A/L;  %计算比值
+I=-sum(A.*log(A+eps)/log(2));%计算信息熵
+
+
+%计算基尼指数的函数
+function I=GINI(A)  
+L=sum(A);%计算总数  
+A=A/L;  %计算比值
+I=1-sum(A.*A);%计算信息熵
